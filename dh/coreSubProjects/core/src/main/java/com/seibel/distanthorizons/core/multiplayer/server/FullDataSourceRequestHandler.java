@@ -243,13 +243,13 @@ public class FullDataSourceRequestHandler implements AutoCloseable
 		List<Long> futureIds = new ArrayList<>();
 		for (Map.Entry<Long, DataSourceRequestGroup> entry : this.requestGroupsByFutureId.entrySet())
 		{
-			for (DataSourceRequestGroup.RequestData requestData : entry.getValue().requestMessages.values())
+			// groups are shared between players requesting the same section,
+			// so only cancel the request this future ID belongs to
+			DataSourceRequestGroup.RequestData requestData = entry.getValue().requestMessages.get(entry.getKey());
+			if (requestData != null
+				&& requestData.serverPlayerState == playerState)
 			{
-				if (requestData.serverPlayerState == playerState)
-				{
-					futureIds.add(entry.getKey());
-					break;
-				}
+				futureIds.add(entry.getKey());
 			}
 		}
 		

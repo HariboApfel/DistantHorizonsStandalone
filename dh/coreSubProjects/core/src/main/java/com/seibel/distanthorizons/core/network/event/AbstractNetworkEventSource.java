@@ -164,16 +164,9 @@ public abstract class AbstractNetworkEventSource
 			return;
 		}
 		
+		// empty sets/maps are intentionally kept, removing them could race
+		// with a concurrent registerHandler() adding to the removed set
 		handlerSet.remove(new NetworkMessageConsumer<>(handlerImplementation));
-		if (handlerSet.isEmpty())
-		{
-			handlerMap.remove(eventSource, handlerSet);
-		}
-		
-		if (handlerMap.isEmpty())
-		{
-			this.networkHandlerSetByMessageClass.remove(handlerClass, handlerMap);
-		}
 	}
 	
 	protected void removeAllHandlers(AbstractNetworkEventSource eventSource)

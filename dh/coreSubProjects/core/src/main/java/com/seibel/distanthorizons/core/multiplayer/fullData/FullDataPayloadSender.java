@@ -55,16 +55,11 @@ public class FullDataPayloadSender implements AutoCloseable
 		this.tickTimerTask.cancel();
 		this.sharedBandwidthLimit.setSenderActive(this, false);
 		
+		// payload buffers are shared between every player the payload is sent to
+		// and are unpooled heap buffers, so they're dropped instead of released
 		synchronized (this.transferQueue)
 		{
-			PendingTransfer pendingTransfer;
-			while ((pendingTransfer = this.transferQueue.poll()) != null)
-			{
-				if (pendingTransfer.buffer.refCnt() > 0)
-				{
-					pendingTransfer.buffer.release();
-				}
-			}
+			this.transferQueue.clear();
 		}
 	}
 	
@@ -107,10 +102,6 @@ public class FullDataPayloadSender implements AutoCloseable
 					&& oldestUnsentRealTime != null
 					&& this.transferQueue.remove(oldestUnsentRealTime))
 				{
-					if (oldestUnsentRealTime.buffer.refCnt() > 0)
-					{
-						oldestUnsentRealTime.buffer.release();
-					}
 					this.logDroppedRealTimeUpdate();
 				}
 			}
@@ -145,21 +136,35 @@ public class FullDataPayloadSender implements AutoCloseable
 		
 		while (bytesToSend > 0)
 		{
-			PendingTransfer pendingTransfer = this.transferQueue.peek();
-			if (pendingTransfer == null)
+			PendingTransfer pendingTransfer;
+			FullDataSplitMessage chunkMessage;
+			int chunkSize;
+			boolean transferFinished;
+
+			// synchronized so a transfer can't be dropped (see enqueueTransfer) while it's partially sent
+			synchronized (this.transferQueue)
 			{
-				return;
+				pendingTransfer = this.transferQueue.peek();
+				if (pendingTransfer == null)
+				{
+					return;
+				}
+
+				chunkSize = Math.min(Math.min(bytesToSend, FULL_DATA_SPLIT_SIZE_IN_BYTES), pendingTransfer.buffer.readableBytes());
+				boolean isFirstChunk = pendingTransfer.buffer.readerIndex() == 0;
+				chunkMessage = new FullDataSplitMessage(pendingTransfer.bufferId, pendingTransfer.buffer.readSlice(chunkSize).retain(), isFirstChunk);
+
+				transferFinished = (pendingTransfer.buffer.readableBytes() == 0);
+				if (transferFinished)
+				{
+					this.transferQueue.poll();
+				}
 			}
-			
-			int chunkSize = Math.min(Math.min(bytesToSend, FULL_DATA_SPLIT_SIZE_IN_BYTES), pendingTransfer.buffer.readableBytes());
-			boolean isFirstChunk = pendingTransfer.buffer.readerIndex() == 0;
-			
-			FullDataSplitMessage chunkMessage = new FullDataSplitMessage(pendingTransfer.bufferId, pendingTransfer.buffer.readSlice(chunkSize).retain(), isFirstChunk);
+
 			this.session.sendMessage(chunkMessage);
-			
 			bytesToSend -= chunkSize;
-			
-			if (pendingTransfer.buffer.readableBytes() == 0)
+
+			if (transferFinished)
 			{
 				try
 				{
@@ -169,7 +174,6 @@ public class FullDataPayloadSender implements AutoCloseable
 				{
 					LOGGER.error("Failed to send the completed full data transfer", e);
 				}
-				this.transferQueue.poll();
 			}
 		}
 	}
