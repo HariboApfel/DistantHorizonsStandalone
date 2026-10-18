@@ -87,6 +87,11 @@ public abstract class AbstractLodRequestState
 						int sleepTimeInSec = Config.Common.WorldGenerator.generationProgressDisplayIntervalInSeconds.get();
 						Thread.sleep(sleepTimeInSec * 1_000L);
 					}
+					catch (InterruptedException e)
+					{
+						// closeAsync() shuts this thread down
+						return;
+					}
 					catch (Exception e)
 					{
 						LOGGER.error("Unexpected issue displaying chunk retrieval progress [" + e.getMessage() + "].", e);
