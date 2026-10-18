@@ -14,6 +14,7 @@ import com.seibel.distanthorizons.core.logging.f3.F3Screen;
 import com.seibel.distanthorizons.core.pos.DhChunkPos;
 import com.seibel.distanthorizons.core.util.LodUtil;
 import com.seibel.distanthorizons.core.util.ThreadUtil;
+import com.seibel.distanthorizons.core.util.threading.PriorityTaskPicker;
 import com.seibel.distanthorizons.core.util.threading.ThreadPoolUtil;
 import com.seibel.distanthorizons.core.world.EWorldEnvironment;
 import com.seibel.distanthorizons.core.logging.DhLogger;
@@ -44,6 +45,12 @@ public class ChunkUpdateQueueManager implements AutoCloseable
 	 * used to prevent updates from infinitely pilling up if the user flies around extremely fast 
 	 */
 	public static final int MAX_UPDATING_CHUNK_COUNT_PER_THREAD_AND_PLAYER = 1_000;
+	
+	/**
+	 * how many LOD build tasks can be queued per thread before chunks are kept
+	 * in the size-limited update queue instead of the executor's unbounded queue
+	 */
+	public static final int MAX_QUEUED_LOD_BUILD_TASKS_PER_THREAD = 64;
 	
 	/** how many milliseconds must pass before an overloaded message can be sent in chat or the log */
 	public static final int MIN_MS_BETWEEN_OVERLOADED_LOG_MESSAGE = 30_000;
@@ -348,8 +355,9 @@ public class ChunkUpdateQueueManager implements AutoCloseable
 			return;
 		}
 		
-		AbstractExecutorService executor = ThreadPoolUtil.getChunkToLodBuilderExecutor();
-		if (executor == null)
+		PriorityTaskPicker.Executor executor = ThreadPoolUtil.getChunkToLodBuilderExecutor();
+		if (executor == null
+			|| executor.getQueueSize() >= executor.getPoolSize() * MAX_QUEUED_LOD_BUILD_TASKS_PER_THREAD)
 		{
 			this.updateQueue.addItem(updateData.chunkWrapper.getChunkPos(), updateData);
 			return;

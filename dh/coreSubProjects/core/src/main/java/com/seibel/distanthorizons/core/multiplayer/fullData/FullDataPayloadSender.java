@@ -20,6 +20,11 @@ public class FullDataPayloadSender implements AutoCloseable
 	/** 1 Mebibyte minus 576 bytes for other info */
 	public static final int FULL_DATA_SPLIT_SIZE_IN_BYTES = 1_048_000;
 	
+	/** max number of queued real-time updates before the oldest unsent one is dropped */
+	public static final int MAX_PENDING_REALTIME_UPDATES = 512;
+	/** how often the dropped real-time update warning can be logged */
+	private static final long MIN_MS_BETWEEN_REALTIME_DROP_LOGS = 30_000;
+	
 	
 	private static final Timer UPLOAD_TIMER = TimerUtil.CreateTimer("FullDataPayloadSender");
 	private final TimerTask tickTimerTask = TimerUtil.createTimerTask(this::tick);
@@ -31,6 +36,8 @@ public class FullDataPayloadSender implements AutoCloseable
 	private final ConcurrentLinkedQueue<PendingTransfer> transferQueue = new ConcurrentLinkedQueue<>();
 	
 	private final SharedBandwidthLimit sharedBandwidthLimit;
+	
+	private long lastRealTimeDropLogMs = 0;
 	
 	
 	public FullDataPayloadSender(NetworkSession session, IntSupplier maxKBpsSupplier, SharedBandwidthLimit sharedBandwidthLimit)
@@ -48,25 +55,80 @@ public class FullDataPayloadSender implements AutoCloseable
 		this.tickTimerTask.cancel();
 		this.sharedBandwidthLimit.setSenderActive(this, false);
 		
-		PendingTransfer pendingTransfer;
-		while ((pendingTransfer = this.transferQueue.poll()) != null)
+		synchronized (this.transferQueue)
 		{
-			if (pendingTransfer.buffer.refCnt() > 0)
+			PendingTransfer pendingTransfer;
+			while ((pendingTransfer = this.transferQueue.poll()) != null)
 			{
-				pendingTransfer.buffer.release();
+				if (pendingTransfer.buffer.refCnt() > 0)
+				{
+					pendingTransfer.buffer.release();
+				}
 			}
 		}
 	}
 	
 	
 	public void sendInChunks(FullDataPayload payload, Runnable sendFinalMessage)
+	{ this.enqueueTransfer(payload, sendFinalMessage, false); }
+	
+	public void sendRealTimeUpdate(FullDataPayload payload, Runnable sendFinalMessage)
+	{ this.enqueueTransfer(payload, sendFinalMessage, true); }
+	
+	private void enqueueTransfer(FullDataPayload payload, Runnable sendFinalMessage, boolean realTime)
 	{
-		if (this.closed)
+		synchronized (this.transferQueue)
+		{
+			if (this.closed)
+			{
+				return;
+			}
+			
+			if (realTime)
+			{
+				int realTimeCount = 0;
+				PendingTransfer oldestUnsentRealTime = null;
+				for (PendingTransfer pendingTransfer : this.transferQueue)
+				{
+					if (!pendingTransfer.realTime)
+					{
+						continue;
+					}
+					
+					realTimeCount++;
+					if (oldestUnsentRealTime == null 
+						&& pendingTransfer.buffer.readerIndex() == 0)
+					{
+						oldestUnsentRealTime = pendingTransfer;
+					}
+				}
+				
+				if (realTimeCount >= MAX_PENDING_REALTIME_UPDATES
+					&& oldestUnsentRealTime != null
+					&& this.transferQueue.remove(oldestUnsentRealTime))
+				{
+					if (oldestUnsentRealTime.buffer.refCnt() > 0)
+					{
+						oldestUnsentRealTime.buffer.release();
+					}
+					this.logDroppedRealTimeUpdate();
+				}
+			}
+			
+			this.transferQueue.add(new PendingTransfer(payload, sendFinalMessage, realTime));
+		}
+	}
+	
+	private void logDroppedRealTimeUpdate()
+	{
+		long now = System.currentTimeMillis();
+		if (now - this.lastRealTimeDropLogMs < MIN_MS_BETWEEN_REALTIME_DROP_LOGS)
 		{
 			return;
 		}
 		
-		this.transferQueue.add(new PendingTransfer(payload, sendFinalMessage));
+		this.lastRealTimeDropLogMs = now;
+		LOGGER.warn("Dropped a real-time LOD update, too many updates are queued. Max queued real-time updates: ["+MAX_PENDING_REALTIME_UPDATES+"].");
 	}
 	
 	private void tick()
@@ -118,12 +180,14 @@ public class FullDataPayloadSender implements AutoCloseable
 		public final int bufferId;
 		public final ByteBuf buffer;
 		public final Runnable sendFinalMessage;
+		public final boolean realTime;
 		
-		private PendingTransfer(FullDataPayload payload, Runnable sendFinalMessage)
+		private PendingTransfer(FullDataPayload payload, Runnable sendFinalMessage, boolean realTime)
 		{
 			this.bufferId = payload.dtoBufferId;
 			this.buffer = payload.dtoBuffer.duplicate().readerIndex(0);
 			this.sendFinalMessage = sendFinalMessage;
+			this.realTime = realTime;
 		}
 		
 	}
