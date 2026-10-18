@@ -208,6 +208,12 @@ public class ForgeServerProxy implements AbstractModInitializer.IEventProxy
 			pendingClickTaskKeys.remove(chunkKey);
 			try
 			{
+				// the task may run ticks later, don't load the chunk again if it was unloaded in the meantime
+				if (!world.getChunkProvider().chunkExists(x >> 4, z >> 4))
+				{
+					return null;
+				}
+
 				Chunk chunk = world.getChunkFromBlockCoords(x, z);
 				ChunkWrapper chunkWrapper = new ChunkWrapper(chunk, wrappedLevel);
 				SharedApi.INSTANCE.applyChunkUpdate(chunkWrapper, wrappedLevel, true);
