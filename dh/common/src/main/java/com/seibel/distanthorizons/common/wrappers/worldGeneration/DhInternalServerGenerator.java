@@ -146,6 +146,20 @@ public class DhInternalServerGenerator
 		increaseChunkLimit(this.dhServerGenTicket, 1000);
 		#endif
 	}
+	
+	public void close()
+	{
+		this.chunkSaveIgnoreTimer.cancel();
+		
+		#if MC_VER <= MC_1_12_2
+		ServerThreadTaskHandler.INSTANCE.queueEssentialTask(() ->
+		{
+			ForgeChunkManager.releaseTicket(this.dhServerGenTicket);
+			return null;
+		});
+		this.generationChunkRefCountMap.clear();
+		#endif
+	}
 
 	#if MC_VER <= MC_1_12_2
 	private static void increaseChunkLimit(ForgeChunkManager.Ticket ticket, int newMaxDepth)
