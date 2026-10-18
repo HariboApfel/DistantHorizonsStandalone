@@ -24,6 +24,8 @@ public class FullDataPayloadSender implements AutoCloseable
 	private static final Timer UPLOAD_TIMER = TimerUtil.CreateTimer("FullDataPayloadSender");
 	private final TimerTask tickTimerTask = TimerUtil.createTimerTask(this::tick);
 	
+	private volatile boolean closed;
+	
 	private final NetworkSession session;
 	private final IntSupplier maxKBpsSupplier;
 	private final ConcurrentLinkedQueue<PendingTransfer> transferQueue = new ConcurrentLinkedQueue<>();
@@ -42,12 +44,28 @@ public class FullDataPayloadSender implements AutoCloseable
 	@Override
 	public void close()
 	{
+		this.closed = true;
 		this.tickTimerTask.cancel();
+		this.sharedBandwidthLimit.setSenderActive(this, false);
+		
+		PendingTransfer pendingTransfer;
+		while ((pendingTransfer = this.transferQueue.poll()) != null)
+		{
+			if (pendingTransfer.buffer.refCnt() > 0)
+			{
+				pendingTransfer.buffer.release();
+			}
+		}
 	}
 	
 	
 	public void sendInChunks(FullDataPayload payload, Runnable sendFinalMessage)
 	{
+		if (this.closed)
+		{
+			return;
+		}
+		
 		this.transferQueue.add(new PendingTransfer(payload, sendFinalMessage));
 	}
 	
@@ -61,7 +79,7 @@ public class FullDataPayloadSender implements AutoCloseable
 				? (maxPlayerRate * 1000) / TICK_RATE + 1
 				: Integer.MAX_VALUE;
 		
-		this.sharedBandwidthLimit.setSenderActive(this, bytesToSend > 0);
+		this.sharedBandwidthLimit.setSenderActive(this, !this.transferQueue.isEmpty());
 		
 		while (bytesToSend > 0)
 		{
