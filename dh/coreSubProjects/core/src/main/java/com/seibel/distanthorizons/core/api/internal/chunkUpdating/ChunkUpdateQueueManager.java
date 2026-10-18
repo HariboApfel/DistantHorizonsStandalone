@@ -52,6 +52,12 @@ public class ChunkUpdateQueueManager implements AutoCloseable
 	 */
 	public static final int MAX_QUEUED_LOD_BUILD_TASKS_PER_THREAD = 64;
 	
+	/** 
+	 * true while the LOD builder holds its maximum number of queued tasks,
+	 * so the queueing thread waits instead of re-checking in a tight loop
+	 */
+	private volatile boolean lodBuilderQueueFull = false;
+	
 	/** how many milliseconds must pass before an overloaded message can be sent in chat or the log */
 	public static final int MIN_MS_BETWEEN_OVERLOADED_LOG_MESSAGE = 30_000;
 	
@@ -248,9 +254,9 @@ public class ChunkUpdateQueueManager implements AutoCloseable
 			{
 				this.processQueue();
 				
-				// if the queue is empty, 
+				// if the queue is empty (or nothing can be dispatched right now), 
 				// reduce the rate that we check the queue again
-				if (this.updateQueue.isEmpty() 
+				if ((this.updateQueue.isEmpty() || this.lodBuilderQueueFull)
 					&& this.preUpdateQueue.isEmpty())
 				{
 					Thread.sleep(PROCESS_QUEUE_DELAY_MS);
@@ -359,9 +365,11 @@ public class ChunkUpdateQueueManager implements AutoCloseable
 		if (executor == null
 			|| executor.getQueueSize() >= executor.getPoolSize() * MAX_QUEUED_LOD_BUILD_TASKS_PER_THREAD)
 		{
+			this.lodBuilderQueueFull = true;
 			this.updateQueue.addItem(updateData.chunkWrapper.getChunkPos(), updateData);
 			return;
 		}
+		this.lodBuilderQueueFull = false;
 		
 		try
 		{
