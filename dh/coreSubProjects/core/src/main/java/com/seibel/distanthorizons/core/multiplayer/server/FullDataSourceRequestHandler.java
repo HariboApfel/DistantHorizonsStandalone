@@ -8,6 +8,7 @@ import com.seibel.distanthorizons.core.level.AbstractDhServerLevel;
 import com.seibel.distanthorizons.core.logging.DhLogger;
 import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
 import com.seibel.distanthorizons.core.multiplayer.fullData.FullDataPayload;
+import com.seibel.distanthorizons.core.network.exceptions.RequestOutOfRangeException;
 import com.seibel.distanthorizons.core.network.exceptions.RequestRejectedException;
 import com.seibel.distanthorizons.core.network.exceptions.SectionRequiresSplittingException;
 import com.seibel.distanthorizons.core.network.messages.fullData.FullDataSourceRequestMessage;
@@ -315,6 +316,27 @@ public class FullDataSourceRequestHandler implements AutoCloseable
 		{
 			requestGroup.markWorldGenTaskComplete();
 			this.tryFulfillDataSourceRequestGroup(requestGroup, pos);
+		}
+	}
+	
+	public void onWorldGenTaskFailed(long pos)
+	{
+		DataSourceRequestGroup requestGroup = this.requestGroupsByPos.remove(pos);
+		if (requestGroup == null)
+		{
+			return;
+		}
+		
+		if (!requestGroup.tryClose())
+		{
+			return;
+		}
+		
+		for (DataSourceRequestGroup.RequestData requestData : requestGroup.requestMessages.values())
+		{
+			this.requestGroupsByFutureId.remove(requestData.futureId());
+			requestData.rateLimiterSet.generationRequestRateLimiter.release();
+			requestData.message.sendResponse(new RequestOutOfRangeException("World generation failed for this section, retry later."));
 		}
 	}
 	
