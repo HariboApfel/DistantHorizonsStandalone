@@ -206,6 +206,7 @@ public abstract class AbstractLodRequestState
 	{
 		// this should stop the updater thread
 		this.progressUpdateThreadRunning = false;
+		this.progressUpdaterThread.shutdownNow();
 		
 		return this.retrievalQueue.startClosingAsync(true, doInterrupt)
 			.exceptionally(e ->
